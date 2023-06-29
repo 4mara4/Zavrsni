@@ -1,0 +1,630 @@
+---
+---
+---
+
+## **IZVJEŠTAJ STATISTIKE ISPITA**
+
+### Grafički prikazi razdiobe bodova
+
+**Histogram** je graf distribucije numeričkih podataka (bodova na ispitu). Svaki stupac predstavlja broj studenata koji su ostvarili određen postotak na ispitu.
+
+Crvena linija predstavlja srednju vrijednost u postotku rezultata, a zelena liniju gustoće vjerojatnosti. Gustoća vjerojatnosti je omjer vjerojatnosti da se vrijednost podataka nalazi unutar određenog raspona i širine tog raspona.
+
+```{r include=FALSE}
+library(RPostgres)
+library(e1071)
+library(fpc)
+library(polycor)
+library(psych)
+library(polycor)
+library(rstatix)
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(farver)
+library(lsr)
+library(knitr)
+library(flextable)
+library(officer)
+library(ggplot2)
+library(magick)
+library(gridExtra)
+library(grid)
+library(ggpubr)
+library(png)
+library(patchwork)
+library(rmarkdown)
+library(officer)
+```
+
+```{r include=FALSE}
+con <- dbConnect(RPostgres::Postgres(), dbname = "database", host = "localhost", port = 5432, user = "postgres", password = "bazepodataka")
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+id_test <- 13539
+```
+
+```{r echo=FALSE, warning=FALSE}
+
+query <- paste0("SELECT * FROM test_instance WHERE id_test = ", id_test)
+test <- dbGetQuery(con, query)
+scores <- test$score
+
+title_query <- paste0("SELECT title FROM test WHERE id = ", id_test)
+title <- dbGetQuery(con, title_query)
+title <- as.character(title$title[1])
+
+query_max_score <- paste0("SELECT max_score FROM test WHERE id = ", id_test)
+max_score <- dbGetQuery(con, query_max_score)
+max_score <- max_score$max_score
+
+percentages <- scores / max_score * 100
+
+score_data <- data.frame(percentages)
+
+
+
+
+ggplot(data = score_data, aes(x = percentages, y = after_stat(density))) +
+  geom_histogram(binwidth = 10, fill = "#4c4e52", color = "black") +
+  scale_x_continuous(limits = c(-10, 110), breaks = seq(0, 100, 10))  +
+  labs(x = "Rezultati (%)", y = "Frekvencija", title = paste0("Histogram rezultata za ", title)) + 
+  theme(panel.background = element_rect(fill = "#f2f2f2")) +
+  geom_density(color = "green", linewidth = 1, stat = "density") + 
+  geom_vline(aes(xintercept = mean(percentages), color = "#ff0000"), size = 1, show.legend = FALSE)
+
+
+
+
+
+
+```
+
+**Boxplot** (kutijasti dijagram) je graf distribucije numeričkih podataka u obliku kutije koji prikazuje razdiobu po kvartilima.
+
+-   donji izdanak prikazuje najmanju vrijednost bodova
+
+-   donja strana kutije predstavlja prvi kvartil (25% instanci je ispod označenog bodovnog ranga)
+
+-   srednja linija unutar kutije predstavlja drugi kvartil ili medijan (50%)
+
+-   gornja strana kutije predstavlja treći kvartil (75%)
+
+-   gornji izdanak predstavlja najveću vrijednost bodova
+
+-   moguće točke van intervala kutije predstavljaju tzv. *outliere*, ekstremne vrijednosti koje se znatno razlikuju od ostalih vrijednosti
+
+```{r echo=FALSE}
+ggplot(score_data, aes(y = percentages)) + geom_boxplot( fill = "#4c4e52") +
+  labs(y = "Rezultati(%)", title = paste0("Boxplot rezultata za ", title)) +
+  theme(panel.background = element_rect(fill= "#f2f2f2"))
+```
+
+### Statistički pokazatelji za ispit
+
+```{r include=FALSE}
+mean <- round(mean(test$score), 3)
+median <- round(median(test$score), 3)
+stdev <- round(sd(test$score), 3)
+var <- round(var(test$score), 3)
+min <- min(test$score)
+max <- max(test$score)
+sample_size <- length(test)
+stderr <- round(stdev / sqrt(sample_size), 3)
+```
+
+-   **srednja vrijednost** - aritmetička sredina podataka u uzorku
+
+-   **medijan** - središnji podatak u uzorku
+
+-   **standardna devijacija** - prosječno odstupanje od srednje vrijednosti
+
+-   **minimalan rezultat**
+
+-   **maksimalan rezultat**
+
+-   **standardna pogreška** - mjera nepreciznosti procjene srednje vrijednosti
+
+-   **skewness** - mjeri asimetriju razdiobe, stupanj u kojem je ona nakrivljena prema lijevo ili desno u odnosu na normalnu razdiobu, u ovom slučaju prema manjim ili većim rezultatima (pozitivan rezultat ukazuje na ukošenost prema desnoj strani, a negativan prema lijevoj)
+
+-   **kurtosis** - mjeri stupanj repova distribucije u odnosu na normalnu razdiobu, daje informaciju o prisutnosti outliera ili ekstremnih vrijednosti (visoki stupanj ukazuje na visok, izbočen vrh u sredini krivulje i teške repove, a negativan na nizak i ravan vrh i lake repove)
+
+-   **Cronbach alfa** - mjera interne konzistencije zadataka u ispitu, daje uvid u to koliko su pojedini zadaci međusobno korelirani i koliko dobro mjere isto prekriveno svojstvo (znanje studenta), male vrijednosti u tablici su označene crvenom, a velike zelenom bojom
+
+\*Cronbach alfu moguće je izračunati samo za pitanja višestrukog izbora. Za one ispite koji se ne sastoje od tih pitanja, ili nemaju dovoljno varijabilnosti u rezultatima, nema podatka u tablici.
+
+```{r include=FALSE}
+skewness <- round(skewness(test$score), 3)
+kurtosis <- round(kurtosis(test$score), 3)
+```
+
+```{r include=FALSE}
+query_test_type <- paste0("SELECT id_test_type FROM test WHERE id = ", id_test)
+test_type <- dbGetQuery(con, query_test_type)
+test_type <- test_type$id_test_type
+```
+
+```{r echo=FALSE}
+
+if(test_type != 1) {
+  cronbach_alpha_percent <- NA
+} else {
+  query_data <- paste0("SELECT id_test_instance, id_question, test_instance_question.score AS score FROM test_instance_question JOIN test_instance ON test_instance_question.id_test_instance = test_instance.id WHERE id_test = ", id_test)
+  data <- dbGetQuery(con, query_data )
+  #print(data)
+  data_pivot <- data %>% pivot_wider(names_from = id_question, values_from = score)
+  #print(data_pivot)
+  question_data <- data_pivot[, -1]
+  #print(question_data)
+  missing_values <- sapply(question_data, function(x) any(is.na(x)))
+  question_data_clean <- question_data[, !missing_values & apply (question_data, 2, sd) > 0]
+  #print(question_data_clean)
+  
+
+  # Check if there are still rows remaining
+  if (nrow(question_data_clean) == 0 || ncol(question_data_clean) == 0) {
+    cronbach_alpha_percent <- NA
+  } else {
+   # missing_values <- sapply(question_data, function(x) any(is.na(x)))
+    #question_data_clean <- question_data[, !missing_values & apply(question_data, 2, sd) > 0]
+    cronbach_alpha <- psych::alpha(question_data_clean)$total$raw_alpha
+    cronbach_alpha <- round(cronbach_alpha, 4) * 100 
+    cronbach_alpha_percent <- paste(cronbach_alpha, "%", sep = "")
+  }
+}
+
+```
+
+```{r echo=FALSE, warning=FALSE}
+#set_flextable_defaults(fonts_ignore=TRUE)
+my_table <- data.frame(`ID` = c(id_test),
+                       `Srednja vrijednost` = c(mean),
+                       `Medijan` = c(median),
+                       `Stand. devijacija` = c(stdev),
+                       `Min rezultat` = c(min),
+                       `Maks rezultat` = c(max),
+                       `Stand. pogreska` = c(stderr),
+                       `Skewness` = c(skewness),
+                       `Kurtosis` = c(kurtosis),
+                       `Cronbach alfa` = c(cronbach_alpha_percent))
+
+colnames(my_table) <- gsub("\\.", " ", colnames(my_table))
+
+ft <- flextable(my_table)
+
+header_labels <- c("ID", "Srednja vrijednost", "Medijan", "Stand. devijacija", "Min rezultat", "Maks rezultat", "Stand. pogreška", "Skewness", "Kurtosis", "Cronbach alfa")
+ft <- set_header_labels(ft, values = header_labels)
+
+if(!is.na(cronbach_alpha_percent)) {
+  if(cronbach_alpha < 50) {
+    ft <- bg(ft, i = 1, j = "Cronbach alfa", bg = "#ff7276")
+  } else {
+    ft <- bg(ft, i = 1, j = "Cronbach alfa", bg = "#90ee90", part = "body")
+  }
+} 
+
+
+ft <- theme_box(ft)
+ft <- align(ft, align = "center", part = "all")
+ft <- fontsize(ft, part = "header", size = 9)
+
+ft <- width(ft, width = 0.6)
+
+
+ft
+
+#save_as_image(ft, "image.png")
+
+
+```
+
+```{r echo=FALSE}
+#knitr::include_graphics("image.png")
+```
+
+```{r include=FALSE}
+questions_query <- paste0("SELECT DISTINCT id_question FROM test_instance_question JOIN test_instance ON test_instance_question.id_test_instance = test_instance.id WHERE id_test = ", id_test)
+questionIds <- dbGetQuery(con, questions_query )
+questionIds <- as.character(questionIds$id_question)
+
+```
+
+### Grafički prikazi rezultata zadataka
+
+Za pojedine ispite, moguć je prikaz histograma i kutijastih dijagrama ostvarenih bodova.
+
+```{r include=FALSE}
+question_types <- numeric()
+
+facility_indexes <- numeric()
+
+means <- numeric()
+
+for(questionId in questionIds) {
+  query1 <- paste0("SELECT * FROM test_instance_question JOIN test_instance ON test_instance_question.id_test_instance = test_instance.id WHERE id_question = ", questionId, " AND id_test = ", id_test)
+  totalrows <- dbGetQuery(con, query1)
+  total <- nrow(totalrows)
+  
+  scores_for_means <- totalrows$score
+  mean <- mean(scores_for_means)
+  mean <- round(mean, 3)
+  means <- c(means, mean)
+  
+  query_question_type <- paste0("SELECT id_question_type FROM question WHERE id = ", questionId)
+  question_type <- dbGetQuery(con, query_question_type)
+  question_type <- question_type$id_question_type
+  question_types <- c(question_types, question_type)
+  
+  
+  if(question_type == 1 || question_type == 4) {
+    query2 <- paste0("SELECT * FROM test_instance_question JOIN test_instance ON test_instance_question.id_test_instance = test_instance.id WHERE id_question = ", questionId, " AND id_test = ",id_test, " AND test_instance_question.score_perc >= 0.5")
+    correctrows <- dbGetQuery(con, query2)
+    
+  } else {
+      query2 <- paste0("SELECT * FROM test_instance_question JOIN test_instance ON test_instance_question.id_test_instance = test_instance.id WHERE id_question = ", questionId, " AND id_test = ", id_test, " AND test_instance_question.score_perc = 1.000")
+      correctrows <- dbGetQuery(con, query2)
+  }
+  
+  
+  totalcorrect <- nrow(correctrows)
+  facility_index <- totalcorrect / total
+  facility_index <- round(facility_index * 100, 2)
+  
+  facility_indexes <- c(facility_indexes, facility_index)
+  
+  
+}
+facility_indexes_percent <- numeric()
+for(i in 1:length(facility_indexes)) {
+  facility_indexes_percent <- c(facility_indexes_percent, paste(facility_indexes[i], "%", sep = ""))
+}
+
+```
+
+```{r include=FALSE}
+dIndexes <- numeric()
+dIndexes_percent <- numeric()
+
+
+for(questionId in questionIds) {
+  query1 <- paste0("SELECT test_instance.score FROM test_instance_question JOIN test_instance ON test_instance_question.id_test_instance = test_instance.id WHERE id_test = ", id_test, " AND id_question = ", questionId)
+  scores <- dbGetQuery(con, query1)
+  scores <- (scores$score)
+  
+  
+  query2 <- paste0("SELECT test_instance_question.score_perc FROM test_instance_question JOIN test_instance ON test_instance_question.id_test_instance = test_instance.id WHERE id_test = ", id_test, " AND id_question = ", questionId)
+  binary <- dbGetQuery(con, query2)
+  
+  binary <- as.numeric(binary$score_perc)
+  
+  if(question_type == 1 || question_type == 4) {
+    binary_modified <- ifelse(binary < 1, -1, binary)
+  } else {
+    binary_modified <- ifelse(binary < 0.5, -1, binary)
+    binary_modified <- ifelse(binary >= 0.5, 1, binary)
+  }
+  
+  
+  discrimination_index <- cor(scores, binary_modified)
+  if(is.na(discrimination_index)) {
+    dIndexes <- c(dIndexes, NA)
+    dIndexes_percent <- c(dIndexes_percent, NA)
+  } else {
+    discrimination_index <- round(discrimination_index * 100, 2)
+    dIndexes <- c(dIndexes, discrimination_index)
+    dIndexes_percent <- c(dIndexes_percent, paste(discrimination_index, "%", sep = ""))
+  }
+
+}
+
+```
+
+```{r include=FALSE}
+dEfficiencies <- numeric()
+dEfficiencies_percent <- numeric()
+indexes <- numeric()
+for (i in 1:length(questionIds)) {
+  indexes <- c(indexes, i)
+  if (is.na(dIndexes[[i]][1]) || is.na(facility_indexes[[i]][1])) {
+    print("Invalid values encountered. Skipping calculation.")
+    dEfficiencies <- c(dEfficiencies, NA)
+    dEfficiencies_percent <- c(dEfficiencies_percent, NA)
+    next
+  }
+  
+  discriminative_efficiency <- dIndexes[[i]][1] / facility_indexes[[i]][1] 
+  discriminative_efficiency <- round(discriminative_efficiency * 100, 2)
+  dEfficiencies <- c(dEfficiencies, discriminative_efficiency)
+  dEfficiencies_percent <- c(dEfficiencies_percent, paste(discriminative_efficiency, "%", sep =""))
+}
+
+```
+
+```{r echo=FALSE}
+
+randomGuess_percent <- numeric()
+randomGuess <- numeric()
+
+for(questionId in questionIds) {
+  if(question_type != 1 && question_type != 4) {
+    randomGuess_percent <- append(randomGuess_percent, NA)
+    break
+  }
+  query1 <- paste0("SELECT correct_answers_permutation FROM test_instance_question JOIN test_instance ON test_instance_question.id_test_instance = test_instance.id WHERE id_test = ", id_test, " AND id_question = ", questionId)
+  
+  query2 <- paste0("SELECT answers_permutation FROM test_instance_question JOIN test_instance ON test_instance_question.id_test_instance = test_instance.id WHERE id_test = ", id_test, " AND id_question = ", questionId)
+  
+  query3 <- paste0("SELECT test_instance_question.score, test_instance_question.score_perc FROM test_instance_question JOIN test_instance ON test_instance_question.id_test_instance = test_instance.id WHERE id_test = ", id_test, " AND id_question = ", questionId)
+  
+  data1 <- dbGetQuery(con, query1)
+  data2 <- dbGetQuery(con, query2)
+  data3 <- dbGetQuery(con, query3)
+  
+  maxscore <- 0
+  
+  for(i in nrow(data3)) {
+    if(data3$score_perc[i] == 1) {
+      maxscore <- data3$score[i]
+      break
+    } 
+  }
+  
+  first_row <- data1[1, ]
+  correct <- length(unlist(strsplit(first_row, ",")))
+  
+  combination <- function(n, r) {
+    return(factorial(n) / (factorial(r) * factorial(n - r)))
+  }
+  
+  
+  first_row <- data2[1, ]
+  if(is.na(first_row)) {
+    rguess <- 0
+  } else {
+    n <- length(unlist(strsplit(first_row, ",")))
+    totalcomb <- combination(n , correct)
+    rguess <- (maxscore / n) * (1 / totalcomb)
+    rguess <- round(rguess * 100, 2)
+  }
+  randomGuess <- c(randomGuess, rguess)
+  randomGuess_percent <- c(randomGuess_percent, paste(rguess, "%", sep = ""))
+  
+}
+
+
+```
+
+```{r include=FALSE}
+print(question_types)
+type_names <- character()
+for(question_type in question_types) {
+  query_type <- paste0("SELECT type_name FROM question_type WHERE id = ", question_type)
+  type <- dbGetQuery(con, query_type)
+  type <- as.character(type)
+  type_names <- c(type_names, type)
+}
+print(type_names)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(out.width = "100%", fig.align = "center")
+
+if(test_type != 1 && test_type != 4) {
+  plots <- list()
+  i <- 1
+  for(questionId in questionIds) {
+    query_score_question = paste0("SELECT test_instance_question.score FROM test_instance_question JOIN test_instance ON test_instance_question.id_test_instance = test_instance.id WHERE id_test = ", id_test, " AND id_question = ", questionId)
+    score_question <- dbGetQuery(con, query_score_question)
+    score_question <- score_question$score
+    
+    model_name_query <- paste0("SELECT DISTINCT model_name FROM grading_model JOIN test_instance_question ON grading_model.id = test_instance_question.id_grading_model JOIN test_instance ON test_instance_question.id_test_instance = test_instance.id WHERE id_test = ", id_test, " AND id_question = ", questionId)
+    model_name <- dbGetQuery(con, model_name_query)
+    model_name <- model_name$model_name
+    
+    elements <- strsplit(model_name, "/")[[1]]
+    max_score <- as.integer(elements[1])
+    
+    percentages <- score_question / max_score * 100
+    
+    score_data <- data.frame(percentages)
+    
+    plot1 <- ggplot(data = score_data, aes(x = percentages, y = after_stat(density))) +
+      geom_histogram(binwidth = 10, fill = "#4c4e52", color = "black") +
+      scale_x_continuous(limits = c(-10, 110), breaks = seq(0, 100, 10)) +
+      labs(x = "Rezultati (%)", y = "Frekvencija", title = paste0("Histogram rezultata za zadatak ", i)) +
+      theme(panel.background = element_rect(fill = "#f2f2f2")) +
+      geom_density(color = "green", linewidth = 1, stat = "density") +
+      geom_vline(aes(xintercept = mean(percentages), color = "#ff0000"), size = 1, show.legend = FALSE)
+    
+    ggsave(paste0("plot1_", i, ".png"), plot1, width = 5, height = 4, dpi = 300)
+    
+    
+    plot2 <- ggplot(score_data, aes(y = percentages)) + geom_boxplot( fill = "#4c4e52") +
+  labs(y = "Rezultati(%)", title = paste0("Boxplot rezultata za zadatak ", i)) +
+  theme(panel.background = element_rect(fill= "#f2f2f2"))
+    
+    ggsave(paste0("plot2_", i, ".png"), plot2, width = 5, height = 3.9, dpi = 300)
+    
+    plot1_grob <- rasterGrob(readPNG(paste0("plot1_", i, ".png")))
+    plot2_grob <- rasterGrob(readPNG(paste0("plot2_", i, ".png")))
+    
+    grid.arrange(plot1_grob, plot2_grob, ncol = 2)
+    
+    i <- i + 1
+    
+  }
+  
+}
+```
+
+### Statistički pokazatelji za zadatke
+
+-   **srednja vrijednost** - aritmetička sredina ostvarenih bodova
+
+-   **indeks lakoće** - udio ispitanika koji su točno odgovorili na pitanje (optimalan raspon 30%-80%), zeleno obojene ćelije označavaju prevelik, a crveno obojene premalen
+
+-   **diskriminacijski indeks** - mjera koliko dobro jedno pitanje / zadatak diskriminira između bolje i lošije grupe ispitanika, gdje bolja grupa podrazumijeva ispitanike koji su ostvarili visok ukupan rezultat, a lošija one koji su ostvarili nizak
+
+-   **diskriminativna učinkovitost** - mjeri koliko je dobar indeks diskriminacije u odnosu na težinu pitanja (indeks lakoće), poželjan je što veći rezultat, crveno obojeni redovi označavaju premalu učinkovitost
+
+-   **slučajan pogodak** - vrijednost bodova koja se može ostvariti nasumičnim pogađanjem odgovora
+
+    ```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+    invisible({
+      Sys.setlocale(category = "LC_ALL", locale = "hr_HR.UTF-8")
+    })
+
+    #set_flextable_defaults(fonts_ignore=TRUE)
+    big_border = fp_border( width = 2)
+
+    questions_table <- data.frame(`br.` = indexes,
+                                  `Tip pitanja` = type_names,
+                                  `ID` = questionIds,
+                                  `Srednja vrijednost` = means,
+                                  `Indeks lakoce` = facility_indexes_percent,
+                                  `Diskr. indeks` = dIndexes_percent,
+                                  `Diskr. ucinkovitost` = dEfficiencies_percent,
+                                  `Slucajan pogodak` = randomGuess_percent)
+    colnames(questions_table) <- gsub("\\.", " ", colnames(questions_table))
+
+    ft <- flextable(questions_table)
+
+
+
+
+
+    for(index in 1:length(questionIds)) {
+      if(facility_indexes[index] < 30) {
+        ft <- bg(ft, i = index, j = "Indeks lakoce", bg = "#ff7276")
+      } else if(facility_indexes[index] > 80) {
+        ft <- bg(ft, i = index, j = "Indeks lakoce", bg = "#90ee90")
+      }
+    }
+
+    header_labels <- c("br.", "Tip pitanja", "ID", "Srednja vrijednost", "Indeks lakoće", "Diskr. indeks", "Diskr. učinkovitost", "Slučajan pogodak")
+    ft <- set_header_labels(ft, values = header_labels)
+
+    for(index in 1 : length(questionIds)) {
+      if(!is.na(dEfficiencies[index]) && dEfficiencies[index] < 15) {
+        ft <- bg(ft, i = index, j = 1:ncol(questions_table), bg = "#ff7276")
+      }
+    }
+    ft <- theme_box(ft)
+
+    ft <- align(ft, align = "center", part = "all")
+
+    header_lengths <- nchar(colnames(questions_table))
+
+    ft <- fontsize(ft, part = "header", size = 10)
+
+    #save_as_image(ft, "image2.png")
+    ft
+    ```
+
+### Prosjek pokazatelja za ispit
+
+U tablici su prikazane prosješne vrijednosti statističkih pokazatelja za zadatke unutar ispita. Ako je prosjek indeksa lakoće manji od 30%, obojan je crvenom bojom, a ako je veći od 80%, obojen je zelenom. Ako je diskriminativna učinkovitost manja od 15%, obojana je crvenom bojom.
+
+```{r echo=FALSE, warning=FALSE}
+
+set_flextable_defaults(fonts_ignore=TRUE)
+
+dIndexes2 <- dIndexes
+
+  for(index in 1:length(questionIds)) {
+    if(is.na(dIndexes2[index])) {
+      dIndexes2 <- dIndexes2[-index]
+      i <- i - 1
+    }
+  }
+  
+dEfficiencies2 <- dEfficiencies
+
+  for(index in 1:length(questionIds)) {
+    if(is.na(dEfficiencies2[index])) {
+      dEfficiencies2 <- dEfficiencies2[-index]
+      i <- i - 1
+    }
+  }
+  mean_facility_indexes <- mean(facility_indexes)
+  mean_facility_indexes <- round(mean_facility_indexes, 2)
+  mean_dIndexes <- mean(dIndexes2)
+  mean_dIndexes <- round(mean_dIndexes, 2)
+  mean_dEfficiencies <- mean(dEfficiencies2)
+  mean_dEfficiencies <- round(mean_dEfficiencies, 2)
+  mean_randomGuess <- mean(randomGuess)
+  mean_randomGuess <- round(mean_randomGuess, 2)
+  
+  mean_facility_indexes_perc <- paste0(mean_facility_indexes, "%", sep = "")
+  mean_dIndexes_perc <- paste0(mean_dIndexes, "%", sep = "")
+
+  mean_dEfficiencies_perc <- paste0(mean_dEfficiencies, "%", sep = "")
+  
+  if(!is.nan(mean_randomGuess)) {
+    mean_randomGuess_perc <- paste0(mean_randomGuess, "%", sep = "")
+  } else {
+    mean_randomGuess_perc <- NA
+  }
+
+  
+
+
+
+means_table <- data.frame(`ID` = id_test,
+                              `Prosjek indeksa lakoće` = mean_facility_indexes_perc,
+                              `Prosjek diskriminacijskog indeksa` = mean_dIndexes_perc,
+                              `Prosjek diskriminativne učinkovitosti` = mean_dEfficiencies_perc,
+                              `Prosjek slučajnog pogotka` = mean_randomGuess_perc)
+colnames(means_table) <- gsub("\\.", " ", colnames(means_table))
+
+ft <- flextable(means_table)
+ft <- theme_box(ft)
+
+ft <- align(ft, align = "center", part = "all")
+
+if(mean_facility_indexes < 30) {
+  ft <- bg(ft, i = 1, j = "Prosjek indeksa lakoće", bg = "#ff7276")
+} else if(mean_facility_indexes > 80) {
+  ft <- bg(ft, i = 1, j = "Prosjek indeksa lakoće", bg = "#90ee90")
+}
+if(mean_dEfficiencies < 15) {
+  ft <- bg(ft, i = 1, j = "Prosjek diskriminativne učinkovitosti", bg = "red")
+}
+ft
+
+```
+
+```{r eval=FALSE, include=FALSE}
+questionIds_temp <- questionIds
+for(i in 1:length(dEfficiencies)) {
+  if(dEfficiencies[i] < 15) {
+    questionIds_temp <- questionIds_temp[-i]
+    i <- i - 1
+  }
+}
+print(questionIds)
+
+if(test_type == 1) {
+  query_data <- paste0("SELECT id_test_instance, id_question, test_instance_question.score AS score FROM test_instance_question JOIN test_instance ON test_instance_question.id_test_instance = test_instance.id WHERE id_test = ", id_test, " AND id_question IN (", paste(questionIds_temp, collapse = ", "), ")")
+  data <- dbGetQuery(con, query_data )
+  data_pivot <- data %>% pivot_wider(names_from = id_question, values_from = score)
+  question_data <- data_pivot[, -1]
+  missing_values <- sapply(question_data, function(x) any(is.na(x)))
+  question_data_clean <- question_data[, !missing_values & apply (question_data, 2, sd) > 0]
+  
+
+  # Check if there are still rows remaining
+  if (nrow(question_data_clean) == 0) {
+    cronbach_alpha_percent <- NA
+  } else {
+   # missing_values <- sapply(question_data, function(x) any(is.na(x)))
+    #question_data_clean <- question_data[, !missing_values & apply(question_data, 2, sd) > 0]
+    cronbach_alpha <- psych::alpha(question_data_clean)$total$raw_alpha
+    cronbach_alpha <- round(cronbach_alpha, 4) * 100 
+    cronbach_alpha_percent <- paste(cronbach_alpha, "%", sep = "")
+  }
+}
+
+```
